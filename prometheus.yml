@@ -1,0 +1,146 @@
+---
+#this is a Playbook to install and configure Prometheus
+
+- hosts: localhost
+  # environment:
+  #   DATABASE_URL: sqlite3:$HOME/Prometheus/databases/mydb.sqlite3" >> ~/.bashrc
+  #   RAILS_ENV: production" >> ~/.bashrc
+  tasks:
+    - name: create the prometheus directory
+      file:
+        path: /opt/prometheus
+        state: directory
+      tags: prometheus
+
+    - name: create the node_exporter directory
+      file:
+        path: /opt/node_exporter
+        state: directory
+      tags: node_exporter
+
+#Download the latest build of prometheus
+    - name: Download lastest build of Prometheus server
+      get_url:
+        url: https://github.com/prometheus/prometheus/releases/download/0.16.0/prometheus-0.16.0.linux-amd64.tar.gz
+        dest: /opt/prometheus
+        mode: '0440'
+      tags: prometheus
+#to untar the tar.gz file
+    - name: Extract the downloaded tar file
+      unarchive:
+        src: /opt/prometheus/prometheus-0.16.0.linux-amd64.tar.gz
+        dest: /opt/prometheus/
+      tags: prometheus
+
+#Installing Node Exporter
+#Prometheus was developed for the purpose of monitoring web services. In order to monitor the metrics of your CentOS server, you should install a tool called Node Exporter. Node Exporter, as its name suggests, exports lots of metrics (such as disk I/O statistics, CPU load, memory usage, network statistics, and more) in a format Prometheus understands.
+    - name: Download Node Exporter
+      get_url:
+        url: https://github.com/prometheus/node_exporter/releases/download/0.11.0/node_exporter-0.11.0.linux-amd64.tar.gz
+        dest: /opt/node_exporter
+        mode: '0440'
+      tags: node_exporter
+
+#to untar the node_exporter.tar.gz file
+    - name: Extract the downloaded tar file
+      unarchive:
+        src: /opt/node_exporter/node_exporter-0.11.0.linux-amd64.tar.gz
+        dest: /opt/node_exporter
+      tags: node_exporter
+
+#create a file
+    # - name: Touch a file, using symbolic modes to set the permissions (equivalent to 0644)e
+
+    - name: Copy file with owner and permissions
+      copy:
+        src: /tmp/node_exporter.service
+        dest: /etc/systemd/system/node_exporter.service
+        owner: root
+        group: root
+        mode: '0644'
+      tags: node_exporter
+
+#start node_exporter.service
+    - name: Start the service
+      shell: |
+        systemctl daemon-reload
+        systemctl enable node_exporter.service
+        systemctl start node_exporter.service
+      become: true
+      register: myop
+      tags: node_exporter
+
+    - name: Output debug
+      debug: var=myop.stdout
+      tags: node_exporter
+
+#Create the prometheus.yml file
+    - name: create a prometheus.yml file
+      template:
+        src: prometheus.cfg #crete the source file in the ansible server before executing this
+        dest: /opt/prometheus/prometheus.yml
+        owner: root
+        group: root
+        mode: '0744'
+      tags: prometheus
+
+#start prometheus server as a background process
+    - name: Start Prometheus server
+      command: nohup ./opt/prometheus/prometheus > prometheus.log 2>&1 &
+      tags: prometheus
+
+#Install PromDash
+#Though the Prometheus server allows you to view graphs and experiment with expressio
+
+    - name: Install required tools
+      yum:
+        name: "{{ item }}"
+        state: present
+      with_items:
+      - git
+      - ruby
+      - ruby-devel
+      - sqlite-devel
+      - zlib-devel
+      - gcc
+      - gcc-c++
+      - automake
+      - patch
+      tags: prometheus
+
+    - git:
+      repo: https://github.com/prometheus/promdash.git
+      dest: /opt/prometheus/promdash
+      separate_git_dir: /opt/prometheus/promdash.git
+      tags: prometheus
+#Install a gem called bundler and use bundle to install all the Ruby gems that PromDash requires. As we will be configuring PromDash to work with SQLite3 in this tutorial, make sure you exclude the gems for MySQL and PostgreSQL using the --without parameter:
+    - name: Start the service
+      shell: |
+        gem install bundler
+        bundle install --without mysql postgresql
+      become: true
+      register: bundler
+      tags: prometheus
+
+    - name: Output debug
+      debug: var=bundler.stdout
+      tags: prometheus
+
+#Setting Up the Rails Environment
+    - name: Create SQLite3 database directory
+      file:
+        path: /opt/prometheus/databases
+        state: directory
+      tags: prometheus
+
+    - name: Set environment variable and create PromDash's tables in SQLite3 database using 'rake'
+      shell: |
+        echo "export DATABASE_URL=sqlite3:$HOME/Prometheus/databases/mydb.sqlite3" >> ~/.bashrc
+        echo "export RAILS_ENV=production" >> ~/.bashrc
+        . ~/.bashrc
+        rake db:migrate
+        rake assets:precompile
+        bundle exec thin start -d
+      become: true
+      register: rake
+      tags: prometheus
